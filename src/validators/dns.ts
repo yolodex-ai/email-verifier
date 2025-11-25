@@ -158,10 +158,11 @@ export async function getPrimaryMx(
 ): Promise<string | null> {
   const result = await checkDns(domain, timeout);
   
-  if (result.mxRecords.length === 0) {
+  const firstRecord = result.mxRecords[0];
+  if (!firstRecord) {
     return null;
   }
 
-  return result.mxRecords[0].exchange;
+  return firstRecord.exchange;
 }
 

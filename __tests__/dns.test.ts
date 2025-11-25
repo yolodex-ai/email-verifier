@@ -2,6 +2,9 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import dns from 'dns';
 import { checkDns, lookupMx, lookupA, getPrimaryMx } from '../src/validators/dns';
 
+// Type for DNS callback functions
+type DnsCallback<T> = (err: NodeJS.ErrnoException | null, result: T) => void;
+
 // Mock the dns module
 vi.mock('dns', () => ({
   default: {
@@ -27,8 +30,11 @@ describe('DNS Validators', () => {
         { exchange: 'mx3.example.com', priority: 30 },
       ];
 
-      vi.mocked(dns.resolveMx).mockImplementation((_domain, callback) => {
-        (callback as Function)(null, mockMx);
+      vi.mocked(dns.resolveMx).mockImplementation((
+        _domain: string,
+        callback: unknown
+      ) => {
+        (callback as DnsCallback<typeof mockMx>)(null, mockMx);
       });
 
       const result = await lookupMx('example.com');
@@ -41,8 +47,11 @@ describe('DNS Validators', () => {
     });
 
     it('should return empty array when no MX records', async () => {
-      vi.mocked(dns.resolveMx).mockImplementation((_domain, callback) => {
-        (callback as Function)(null, []);
+      vi.mocked(dns.resolveMx).mockImplementation((
+        _domain: string,
+        callback: unknown
+      ) => {
+        (callback as DnsCallback<dns.MxRecord[]>)(null, []);
       });
 
       const result = await lookupMx('no-mx.example.com');
@@ -50,8 +59,12 @@ describe('DNS Validators', () => {
     });
 
     it('should return empty array on DNS error', async () => {
-      vi.mocked(dns.resolveMx).mockImplementation((_domain, callback) => {
-        (callback as Function)(new Error('ENOTFOUND'), null);
+      vi.mocked(dns.resolveMx).mockImplementation((
+        _domain: string,
+        callback: unknown
+      ) => {
+        const error = new Error('ENOTFOUND') as NodeJS.ErrnoException;
+        (callback as DnsCallback<dns.MxRecord[] | null>)(error, null);
       });
 
       const result = await lookupMx('nonexistent.example.com');
@@ -63,8 +76,11 @@ describe('DNS Validators', () => {
     it('should return A records', async () => {
       const mockA = ['93.184.216.34', '93.184.216.35'];
 
-      vi.mocked(dns.resolve4).mockImplementation((_domain, callback) => {
-        (callback as Function)(null, mockA);
+      vi.mocked(dns.resolve4).mockImplementation((
+        _domain: string,
+        callback: unknown
+      ) => {
+        (callback as DnsCallback<string[]>)(null, mockA);
       });
 
       const result = await lookupA('example.com');
@@ -72,8 +88,12 @@ describe('DNS Validators', () => {
     });
 
     it('should return empty array when no A records', async () => {
-      vi.mocked(dns.resolve4).mockImplementation((_domain, callback) => {
-        (callback as Function)(new Error('ENOTFOUND'), null);
+      vi.mocked(dns.resolve4).mockImplementation((
+        _domain: string,
+        callback: unknown
+      ) => {
+        const error = new Error('ENOTFOUND') as NodeJS.ErrnoException;
+        (callback as DnsCallback<string[] | null>)(error, null);
       });
 
       const result = await lookupA('nonexistent.example.com');
@@ -85,8 +105,11 @@ describe('DNS Validators', () => {
     it('should return MX records when available', async () => {
       const mockMx = [{ exchange: 'mx.example.com', priority: 10 }];
 
-      vi.mocked(dns.resolveMx).mockImplementation((_domain, callback) => {
-        (callback as Function)(null, mockMx);
+      vi.mocked(dns.resolveMx).mockImplementation((
+        _domain: string,
+        callback: unknown
+      ) => {
+        (callback as DnsCallback<typeof mockMx>)(null, mockMx);
       });
 
       const result = await checkDns('example.com');
@@ -96,12 +119,18 @@ describe('DNS Validators', () => {
     });
 
     it('should fallback to A record when no MX', async () => {
-      vi.mocked(dns.resolveMx).mockImplementation((_domain, callback) => {
-        (callback as Function)(null, []);
+      vi.mocked(dns.resolveMx).mockImplementation((
+        _domain: string,
+        callback: unknown
+      ) => {
+        (callback as DnsCallback<dns.MxRecord[]>)(null, []);
       });
 
-      vi.mocked(dns.resolve4).mockImplementation((_domain, callback) => {
-        (callback as Function)(null, ['93.184.216.34']);
+      vi.mocked(dns.resolve4).mockImplementation((
+        _domain: string,
+        callback: unknown
+      ) => {
+        (callback as DnsCallback<string[]>)(null, ['93.184.216.34']);
       });
 
       const result = await checkDns('example.com');
@@ -112,12 +141,20 @@ describe('DNS Validators', () => {
     });
 
     it('should return invalid when no MX and no A records', async () => {
-      vi.mocked(dns.resolveMx).mockImplementation((_domain, callback) => {
-        (callback as Function)(new Error('ENOTFOUND'), null);
+      vi.mocked(dns.resolveMx).mockImplementation((
+        _domain: string,
+        callback: unknown
+      ) => {
+        const error = new Error('ENOTFOUND') as NodeJS.ErrnoException;
+        (callback as DnsCallback<dns.MxRecord[] | null>)(error, null);
       });
 
-      vi.mocked(dns.resolve4).mockImplementation((_domain, callback) => {
-        (callback as Function)(new Error('ENOTFOUND'), null);
+      vi.mocked(dns.resolve4).mockImplementation((
+        _domain: string,
+        callback: unknown
+      ) => {
+        const error = new Error('ENOTFOUND') as NodeJS.ErrnoException;
+        (callback as DnsCallback<string[] | null>)(error, null);
       });
 
       const result = await checkDns('nonexistent.example.com');
@@ -134,8 +171,11 @@ describe('DNS Validators', () => {
         { exchange: 'mx1.example.com', priority: 10 },
       ];
 
-      vi.mocked(dns.resolveMx).mockImplementation((_domain, callback) => {
-        (callback as Function)(null, mockMx);
+      vi.mocked(dns.resolveMx).mockImplementation((
+        _domain: string,
+        callback: unknown
+      ) => {
+        (callback as DnsCallback<typeof mockMx>)(null, mockMx);
       });
 
       const result = await getPrimaryMx('example.com');
@@ -143,12 +183,20 @@ describe('DNS Validators', () => {
     });
 
     it('should return null when no MX and no A records', async () => {
-      vi.mocked(dns.resolveMx).mockImplementation((_domain, callback) => {
-        (callback as Function)(new Error('ENOTFOUND'), null);
+      vi.mocked(dns.resolveMx).mockImplementation((
+        _domain: string,
+        callback: unknown
+      ) => {
+        const error = new Error('ENOTFOUND') as NodeJS.ErrnoException;
+        (callback as DnsCallback<dns.MxRecord[] | null>)(error, null);
       });
 
-      vi.mocked(dns.resolve4).mockImplementation((_domain, callback) => {
-        (callback as Function)(new Error('ENOTFOUND'), null);
+      vi.mocked(dns.resolve4).mockImplementation((
+        _domain: string,
+        callback: unknown
+      ) => {
+        const error = new Error('ENOTFOUND') as NodeJS.ErrnoException;
+        (callback as DnsCallback<string[] | null>)(error, null);
       });
 
       const result = await getPrimaryMx('nonexistent.example.com');
@@ -156,4 +204,3 @@ describe('DNS Validators', () => {
     });
   });
 });
-

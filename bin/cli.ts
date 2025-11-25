@@ -61,6 +61,10 @@ function parseArgs(args: string[]): CliArgs {
   let i = 0;
   while (i < args.length) {
     const arg = args[i];
+    if (!arg) {
+      i++;
+      continue;
+    }
 
     if (arg === '--help' || arg === '-h') {
       result.help = true;
@@ -74,7 +78,8 @@ function parseArgs(args: string[]): CliArgs {
       result.noCatchAll = true;
     } else if (arg === '--timeout' || arg === '-t') {
       i++;
-      result.timeout = parseInt(args[i], 10) || 10000;
+      const nextArg = args[i];
+      result.timeout = nextArg ? parseInt(nextArg, 10) || 10000 : 10000;
     } else if (arg.startsWith('-')) {
       // Unknown flag, ignore
     } else if (!result.command) {
@@ -245,9 +250,10 @@ async function main(): Promise<void> {
   };
 
   try {
-    if (args.emails.length === 1) {
+    const firstEmail = args.emails[0];
+    if (args.emails.length === 1 && firstEmail) {
       // Single email
-      const result = await verifyEmail(args.emails[0], options);
+      const result = await verifyEmail(firstEmail, options);
 
       if (args.json) {
         console.log(JSON.stringify(result, null, 2));

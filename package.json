@@ -17,6 +17,8 @@
     "test:watch": "vitest",
     "test:coverage": "vitest run --coverage",
     "lint": "tsc --noEmit",
+    "lint:tests": "tsc --noEmit -p tsconfig.test.json",
+    "lint:all": "npm run lint && npm run lint:tests",
     "prepublishOnly": "npm run build"
   },
   "keywords": [

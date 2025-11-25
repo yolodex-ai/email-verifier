@@ -8,7 +8,7 @@
 import type { VerificationResult, VerifyOptions, SmtpStatus } from './types';
 import { isValidFormat, extractDomain, extractLocalPart, normalizeEmail } from './validators/format';
 import { checkDns } from './validators/dns';
-import { smtpProbe, probeWithFallback } from './validators/smtp';
+import { probeWithFallback } from './validators/smtp';
 import { emailCache, dnsCache, emailCacheKey, domainCacheKey } from './cache';
 import { smtpThrottle } from './throttle';
 import { detectProvider } from './providers';
@@ -162,10 +162,10 @@ export async function verifyEmail(
   // Step 3: SMTP check (if enabled)
   let smtpStatus: SmtpStatus = 'skipped';
   
-  if (opts.smtpCheck && mxHosts.length > 0) {
+  const primaryMx = mxHosts[0];
+  
+  if (opts.smtpCheck && mxHosts.length > 0 && primaryMx) {
     // Check throttle
-    const primaryMx = mxHosts[0];
-    
     if (!smtpThrottle.canProceed(primaryMx)) {
       // In backoff, return unknown status
       const result: VerificationResult = {

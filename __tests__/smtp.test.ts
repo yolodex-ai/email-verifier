@@ -14,7 +14,7 @@ class MockSocket extends EventEmitter {
     this.responses = responses;
   }
 
-  connect(_port: number, _host: string, callback: () => void) {
+  connect(_port: number, _host: string, callback: () => void): this {
     setImmediate(() => {
       callback();
       // Emit banner
@@ -23,7 +23,7 @@ class MockSocket extends EventEmitter {
     return this;
   }
 
-  write(data: string) {
+  write(data: string): boolean {
     // Simulate receiving response to command
     setImmediate(() => {
       if (!data.startsWith('QUIT')) {
@@ -33,18 +33,21 @@ class MockSocket extends EventEmitter {
     return true;
   }
 
-  private emitNextResponse() {
+  private emitNextResponse(): void {
     if (this.responseIndex < this.responses.length) {
-      this.emit('data', Buffer.from(this.responses[this.responseIndex]));
+      const response = this.responses[this.responseIndex];
+      if (response) {
+        this.emit('data', Buffer.from(response));
+      }
       this.responseIndex++;
     }
   }
 
-  setTimeout(_timeout: number) {
+  setTimeout(_timeout: number): this {
     return this;
   }
 
-  destroy() {
+  destroy(): void {
     this.destroyed = true;
   }
 }
@@ -74,7 +77,9 @@ describe('SMTP Validators', () => {
         '250 Accepted',
       ];
 
-      vi.mocked(net.Socket).mockImplementation(() => new MockSocket(responses) as unknown as net.Socket);
+      vi.mocked(net.Socket).mockImplementation(
+        () => new MockSocket(responses) as unknown as net.Socket
+      );
 
       const result = await smtpProbe({
         host: 'mx.example.com',
@@ -93,7 +98,9 @@ describe('SMTP Validators', () => {
         '550 User not found',
       ];
 
-      vi.mocked(net.Socket).mockImplementation(() => new MockSocket(responses) as unknown as net.Socket);
+      vi.mocked(net.Socket).mockImplementation(
+        () => new MockSocket(responses) as unknown as net.Socket
+      );
 
       const result = await smtpProbe({
         host: 'mx.example.com',
@@ -112,7 +119,9 @@ describe('SMTP Validators', () => {
         '451 Temporary failure',
       ];
 
-      vi.mocked(net.Socket).mockImplementation(() => new MockSocket(responses) as unknown as net.Socket);
+      vi.mocked(net.Socket).mockImplementation(
+        () => new MockSocket(responses) as unknown as net.Socket
+      );
 
       const result = await smtpProbe({
         host: 'mx.example.com',
@@ -124,9 +133,13 @@ describe('SMTP Validators', () => {
     });
 
     it('should return unknown on connection timeout', async () => {
-      const mockSocket = new EventEmitter() as net.Socket;
-      mockSocket.destroyed = false;
-      mockSocket.connect = vi.fn(function(this: EventEmitter, _port: number, _host: string) {
+      const mockSocket = new EventEmitter() as net.Socket & { destroyed: boolean };
+      (mockSocket as { destroyed: boolean }).destroyed = false;
+      mockSocket.connect = vi.fn(function (
+        this: EventEmitter,
+        _port: number,
+        _host: string
+      ) {
         // Simulate timeout
         setImmediate(() => this.emit('timeout'));
         return this;
@@ -134,7 +147,7 @@ describe('SMTP Validators', () => {
       mockSocket.setTimeout = vi.fn().mockReturnThis();
       mockSocket.destroy = vi.fn();
 
-      vi.mocked(net.Socket).mockImplementation(() => mockSocket);
+      vi.mocked(net.Socket).mockImplementation(() => mockSocket as net.Socket);
 
       const result = await smtpProbe({
         host: 'slow.example.com',
@@ -147,16 +160,20 @@ describe('SMTP Validators', () => {
     });
 
     it('should return unknown on connection error', async () => {
-      const mockSocket = new EventEmitter() as net.Socket;
-      mockSocket.destroyed = false;
-      mockSocket.connect = vi.fn(function(this: EventEmitter, _port: number, _host: string) {
+      const mockSocket = new EventEmitter() as net.Socket & { destroyed: boolean };
+      (mockSocket as { destroyed: boolean }).destroyed = false;
+      mockSocket.connect = vi.fn(function (
+        this: EventEmitter,
+        _port: number,
+        _host: string
+      ) {
         setImmediate(() => this.emit('error', new Error('Connection refused')));
         return this;
       }) as unknown as typeof mockSocket.connect;
       mockSocket.setTimeout = vi.fn().mockReturnThis();
       mockSocket.destroy = vi.fn();
 
-      vi.mocked(net.Socket).mockImplementation(() => mockSocket);
+      vi.mocked(net.Socket).mockImplementation(() => mockSocket as net.Socket);
 
       const result = await smtpProbe({
         host: 'unreachable.example.com',
@@ -175,7 +192,9 @@ describe('SMTP Validators', () => {
         '553 Mailbox name not allowed',
       ];
 
-      vi.mocked(net.Socket).mockImplementation(() => new MockSocket(responses) as unknown as net.Socket);
+      vi.mocked(net.Socket).mockImplementation(
+        () => new MockSocket(responses) as unknown as net.Socket
+      );
 
       const result = await smtpProbe({
         host: 'mx.example.com',
@@ -194,15 +213,19 @@ describe('SMTP Validators', () => {
       vi.mocked(net.Socket).mockImplementation(() => {
         // First host times out, second accepts
         if (hostIndex++ === 0) {
-          const mockSocket = new EventEmitter() as net.Socket;
-          mockSocket.destroyed = false;
-          mockSocket.connect = vi.fn(function(this: EventEmitter, _port: number, _host: string) {
+          const mockSocket = new EventEmitter() as net.Socket & { destroyed: boolean };
+          (mockSocket as { destroyed: boolean }).destroyed = false;
+          mockSocket.connect = vi.fn(function (
+            this: EventEmitter,
+            _port: number,
+            _host: string
+          ) {
             setImmediate(() => this.emit('timeout'));
             return this;
           }) as unknown as typeof mockSocket.connect;
           mockSocket.setTimeout = vi.fn().mockReturnThis();
           mockSocket.destroy = vi.fn();
-          return mockSocket;
+          return mockSocket as net.Socket;
         }
 
         const responses = [
@@ -224,15 +247,19 @@ describe('SMTP Validators', () => {
 
     it('should return unknown if all hosts fail', async () => {
       vi.mocked(net.Socket).mockImplementation(() => {
-        const mockSocket = new EventEmitter() as net.Socket;
-        mockSocket.destroyed = false;
-        mockSocket.connect = vi.fn(function(this: EventEmitter, _port: number, _host: string) {
+        const mockSocket = new EventEmitter() as net.Socket & { destroyed: boolean };
+        (mockSocket as { destroyed: boolean }).destroyed = false;
+        mockSocket.connect = vi.fn(function (
+          this: EventEmitter,
+          _port: number,
+          _host: string
+        ) {
           setImmediate(() => this.emit('timeout'));
           return this;
         }) as unknown as typeof mockSocket.connect;
         mockSocket.setTimeout = vi.fn().mockReturnThis();
         mockSocket.destroy = vi.fn();
-        return mockSocket;
+        return mockSocket as net.Socket;
       });
 
       const result = await probeWithFallback(
@@ -251,7 +278,9 @@ describe('SMTP Validators', () => {
         '550 User not found',
       ];
 
-      vi.mocked(net.Socket).mockImplementation(() => new MockSocket(responses) as unknown as net.Socket);
+      vi.mocked(net.Socket).mockImplementation(
+        () => new MockSocket(responses) as unknown as net.Socket
+      );
 
       const result = await probeWithFallback(
         ['mx1.example.com', 'mx2.example.com'],
@@ -263,4 +292,3 @@ describe('SMTP Validators', () => {
     });
   });
 });
-

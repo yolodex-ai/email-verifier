@@ -40,7 +40,8 @@ const RESPONSE_CODES = {
  */
 function parseResponseCode(response: string): number | null {
   const match = response.match(/^(\d{3})/);
-  return match ? parseInt(match[1], 10) : null;
+  const code = match?.[1];
+  return code ? parseInt(code, 10) : null;
 }
 
 /**
