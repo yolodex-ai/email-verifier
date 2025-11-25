@@ -1,6 +1,6 @@
 {
   "name": "email-verifier-check",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "A simple, zero-dependency email verification library with format validation, DNS checking, and SMTP probing",
   "main": "dist/index.js",
   "module": "dist/index.mjs",
