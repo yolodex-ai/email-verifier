@@ -1,0 +1,46 @@
+{
+  "name": "email-verifier-check",
+  "version": "1.0.0",
+  "description": "A simple, zero-dependency email verification library with format validation, DNS checking, and SMTP probing",
+  "main": "dist/index.js",
+  "module": "dist/index.mjs",
+  "types": "dist/index.d.ts",
+  "bin": {
+    "email-verifier": "dist/cli.js"
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsup",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "test:coverage": "vitest run --coverage",
+    "lint": "tsc --noEmit",
+    "prepublishOnly": "npm run build"
+  },
+  "keywords": [
+    "email",
+    "verification",
+    "validation",
+    "smtp",
+    "mx",
+    "dns"
+  ],
+  "author": "",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": ""
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "devDependencies": {
+    "@types/node": "^20.0.0",
+    "tsup": "^8.0.0",
+    "tsx": "^4.20.6",
+    "typescript": "^5.3.0",
+    "vitest": "^1.0.0"
+  }
+}
