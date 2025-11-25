@@ -6,7 +6,7 @@
   "module": "dist/index.mjs",
   "types": "dist/index.d.ts",
   "bin": {
-    "email-verifier": "dist/cli.js"
+    "email-verifier-check": "dist/cli.js"
   },
   "files": [
     "dist"
