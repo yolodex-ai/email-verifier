@@ -1,4 +1,5 @@
 # Email Verifier
+[![CI](https://github.com/yolodex-ai/email-verifier/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/yolodex-ai/email-verifier/actions/workflows/ci.yml)
 
 A simple, zero-runtime-dependency email verification library for Node.js. Verify email addresses through format validation, DNS checking, and SMTP probing.
 
