@@ -33,8 +33,12 @@
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": ""
+    "url": "git+https://github.com/yolodex-ai/email-verifier.git"
   },
+  "bugs": {
+    "url": "https://github.com/yolodex-ai/email-verifier/issues"
+  },
+  "homepage": "https://github.com/yolodex-ai/email-verifier#readme",
   "engines": {
     "node": ">=18.0.0"
   },
