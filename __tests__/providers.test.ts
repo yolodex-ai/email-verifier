@@ -117,3 +117,4 @@ describe('detectProvider', () => {
   });
 });
 
+

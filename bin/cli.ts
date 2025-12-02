@@ -2,14 +2,14 @@
 
 /**
  * Email Verifier CLI
- * 
+ *
  * A command-line interface for verifying email addresses.
- * 
+ *
  * Usage:
- *   npx email-verifier check user@example.com
- *   npx email-verifier check user1@a.com user2@b.com
- *   npx email-verifier check user@example.com --json
- *   npx email-verifier check user@example.com --no-smtp
+ *   npx email-verifier-check check user@example.com
+ *   npx email-verifier-check check user1@a.com user2@b.com
+ *   npx email-verifier-check check user@example.com --json
+ *   npx email-verifier-check check user@example.com --no-smtp
  */
 
 import { verifyEmail, verifyEmails } from '../src/index';
@@ -104,7 +104,7 @@ ${colors.bold}Email Verifier${colors.reset}
 Verify email addresses through format validation, DNS checking, and SMTP probing.
 
 ${colors.bold}USAGE${colors.reset}
-  email-verifier <command> [options] [emails...]
+  email-verifier-check <command> [options] [emails...]
 
 ${colors.bold}COMMANDS${colors.reset}
   check <email...>    Verify one or more email addresses
@@ -119,16 +119,16 @@ ${colors.bold}OPTIONS${colors.reset}
 
 ${colors.bold}EXAMPLES${colors.reset}
   ${colors.dim}# Verify a single email${colors.reset}
-  email-verifier check user@example.com
+  email-verifier-check check user@example.com
 
   ${colors.dim}# Verify multiple emails${colors.reset}
-  email-verifier check user1@a.com user2@b.com
+  email-verifier-check check user1@a.com user2@b.com
 
   ${colors.dim}# Output as JSON${colors.reset}
-  email-verifier check user@example.com --json
+  email-verifier-check check user@example.com --json
 
   ${colors.dim}# Skip SMTP check (faster, less accurate)${colors.reset}
-  email-verifier check user@example.com --no-smtp
+  email-verifier-check check user@example.com --no-smtp
 `);
 }
 
@@ -136,37 +136,61 @@ ${colors.bold}EXAMPLES${colors.reset}
  * Prints version number
  */
 function printVersion(): void {
-  console.log('1.0.0');
+  console.log('1.0.2');
+}
+
+/**
+ * Formats a boolean check as colored text
+ */
+function formatCheck(value: boolean, trueIsGood = true): string {
+  if (trueIsGood) {
+    return value ? `${colors.green}✓${colors.reset}` : `${colors.red}✗${colors.reset}`;
+  }
+  return value ? `${colors.yellow}⚠${colors.reset}` : `${colors.green}✓${colors.reset}`;
 }
 
 /**
  * Formats a single result for human-readable output
  */
 function formatResult(result: VerificationResult): string {
-  const validIcon = result.valid 
-    ? `${colors.green}✓${colors.reset}` 
+  const validIcon = result.valid
+    ? `${colors.green}✓${colors.reset}`
     : `${colors.red}✗${colors.reset}`;
-  
-  const confidenceColor = result.confidence >= 0.8 
-    ? colors.green 
-    : result.confidence >= 0.5 
-      ? colors.yellow 
+
+  const confidenceColor = result.confidence >= 0.8
+    ? colors.green
+    : result.confidence >= 0.5
+      ? colors.yellow
       : colors.red;
 
   const confidencePercent = Math.round(result.confidence * 100);
 
   let output = `\n${validIcon} ${colors.bold}${result.email}${colors.reset}\n`;
   output += `  ${colors.dim}Valid:${colors.reset} ${result.valid ? 'Yes' : 'No'}\n`;
+  output += `  ${colors.dim}Safe to Send:${colors.reset} ${result.isSafeToSend ? colors.green + 'Yes' : colors.red + 'No'}${colors.reset}\n`;
   output += `  ${colors.dim}Confidence:${colors.reset} ${confidenceColor}${confidencePercent}%${colors.reset}\n`;
-  
-  if (result.details.formatValid) {
-    output += `  ${colors.dim}Format:${colors.reset} ${colors.green}Valid${colors.reset}\n`;
-  } else {
-    output += `  ${colors.dim}Format:${colors.reset} ${colors.red}Invalid${colors.reset}\n`;
+
+  // Comprehensive checks
+  output += `\n  ${colors.bold}Checks:${colors.reset}\n`;
+  output += `    ${formatCheck(result.checks.isValidSyntax)} Valid Syntax\n`;
+  output += `    ${formatCheck(result.checks.isValidDomain)} Valid Domain\n`;
+  output += `    ${formatCheck(result.checks.canConnectSmtp)} SMTP Connection\n`;
+  output += `    ${formatCheck(result.checks.isDeliverable)} Deliverable\n`;
+  output += `    ${formatCheck(!result.checks.isCatchAllDomain)} Not Catch-all\n`;
+  output += `    ${formatCheck(!result.checks.isDisposableEmail)} Not Disposable\n`;
+  output += `    ${formatCheck(!result.checks.isRoleBasedAccount)} Not Role-based\n`;
+  output += `    ${formatCheck(!result.checks.isUnknown)} Verified\n`;
+
+  // Info checks (not good/bad, just informational)
+  if (result.checks.isFreeEmailProvider) {
+    output += `    ${colors.blue}ℹ${colors.reset} Free Email Provider\n`;
   }
 
+  // Details
+  output += `\n  ${colors.bold}Details:${colors.reset}\n`;
+
   if (result.details.mxRecords.length > 0) {
-    output += `  ${colors.dim}MX Records:${colors.reset} ${result.details.mxRecords.slice(0, 3).join(', ')}`;
+    output += `    ${colors.dim}MX Records:${colors.reset} ${result.details.mxRecords.slice(0, 3).join(', ')}`;
     if (result.details.mxRecords.length > 3) {
       output += ` ${colors.dim}(+${result.details.mxRecords.length - 3} more)${colors.reset}`;
     }
@@ -179,16 +203,12 @@ function formatResult(result: VerificationResult): string {
       : result.details.smtpStatus === 'rejected'
         ? colors.red
         : colors.yellow;
-    output += `  ${colors.dim}SMTP Status:${colors.reset} ${smtpColor}${result.details.smtpStatus}${colors.reset}\n`;
-  }
-
-  if (result.details.catchAll !== null) {
-    output += `  ${colors.dim}Catch-all:${colors.reset} ${result.details.catchAll ? colors.yellow + 'Yes' : colors.green + 'No'}${colors.reset}\n`;
+    output += `    ${colors.dim}SMTP Status:${colors.reset} ${smtpColor}${result.details.smtpStatus}${colors.reset}\n`;
   }
 
   if (result.details.provider) {
-    output += `  ${colors.dim}Provider:${colors.reset} ${colors.cyan}${result.details.provider.name}${colors.reset}\n`;
-    output += `  ${colors.dim}Provider URL:${colors.reset} ${result.details.provider.url}\n`;
+    output += `    ${colors.dim}Provider:${colors.reset} ${colors.cyan}${result.details.provider.name}${colors.reset}\n`;
+    output += `    ${colors.dim}Provider URL:${colors.reset} ${result.details.provider.url}\n`;
   }
 
   return output;
@@ -199,22 +219,20 @@ function formatResult(result: VerificationResult): string {
  */
 function formatTable(results: VerificationResult[]): string {
   const header = `
-${colors.bold}Email${' '.repeat(40)}Valid  Confidence  SMTP      Catch-all  Provider${colors.reset}
-${'─'.repeat(110)}`;
+${colors.bold}Email${' '.repeat(35)}Valid  Safe  Confidence  Deliverable  Catch-all  Disposable  Provider${colors.reset}
+${'─'.repeat(130)}`;
 
   const rows = results.map((r) => {
-    const email = r.email.padEnd(45).slice(0, 45);
+    const email = r.email.padEnd(40).slice(0, 40);
     const valid = r.valid ? `${colors.green}Yes${colors.reset}  ` : `${colors.red}No${colors.reset}   `;
+    const safe = r.isSafeToSend ? `${colors.green}Yes${colors.reset} ` : `${colors.red}No${colors.reset}  `;
     const confidence = `${Math.round(r.confidence * 100)}%`.padStart(3).padEnd(12);
-    const smtp = r.details.smtpStatus.padEnd(10);
-    const catchAll = (r.details.catchAll === null 
-      ? '-' 
-      : r.details.catchAll 
-        ? 'Yes' 
-        : 'No').padEnd(11);
-    const provider = r.details.provider?.name || '-';
+    const deliverable = (r.checks.isDeliverable ? 'Yes' : 'No').padEnd(13);
+    const catchAll = (r.checks.isCatchAllDomain ? 'Yes' : 'No').padEnd(11);
+    const disposable = (r.checks.isDisposableEmail ? 'Yes' : 'No').padEnd(12);
+    const provider = (r.details.provider?.name || '-').slice(0, 20);
 
-    return `${email}${valid}${confidence}${smtp}${catchAll}${provider}`;
+    return `${email}${valid}${safe}${confidence}${deliverable}${catchAll}${disposable}${provider}`;
   });
 
   return header + '\n' + rows.join('\n');
@@ -238,8 +256,8 @@ async function main(): Promise<void> {
 
   if (args.command !== 'check' || args.emails.length === 0) {
     console.error(`${colors.red}Error: Please provide email addresses to check${colors.reset}`);
-    console.error(`\nUsage: email-verifier check <email...>`);
-    console.error(`\nRun 'email-verifier --help' for more information.`);
+    console.error(`\nUsage: email-verifier-check check <email...>`);
+    console.error(`\nRun 'email-verifier-check --help' for more information.`);
     process.exit(1);
   }
 
@@ -265,16 +283,17 @@ async function main(): Promise<void> {
     } else {
       // Multiple emails
       console.log(`\n${colors.cyan}Verifying ${args.emails.length} email addresses...${colors.reset}\n`);
-      
+
       const results = await verifyEmails(args.emails, options);
 
       if (args.json) {
         console.log(JSON.stringify(results, null, 2));
       } else {
         console.log(formatTable(results));
-        
+
         const validCount = results.filter((r) => r.valid).length;
-        console.log(`\n${colors.dim}Summary: ${colors.reset}${colors.green}${validCount}${colors.reset} valid, ${colors.red}${results.length - validCount}${colors.reset} invalid`);
+        const safeCount = results.filter((r) => r.isSafeToSend).length;
+        console.log(`\n${colors.dim}Summary: ${colors.reset}${colors.green}${validCount}${colors.reset} valid, ${colors.green}${safeCount}${colors.reset} safe to send, ${colors.red}${results.length - validCount}${colors.reset} invalid`);
       }
 
       const allValid = results.every((r) => r.valid);
@@ -287,4 +306,3 @@ async function main(): Promise<void> {
 }
 
 main();
-
