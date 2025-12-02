@@ -2,22 +2,43 @@
  * Email Verifier
  *
  * A simple, zero-dependency email verification library with format validation,
- * DNS checking, and SMTP probing.
+ * DNS checking, SMTP probing, and advanced catch-all analysis.
  */
 
-import type { VerificationResult, VerifyOptions, SmtpStatus, VerificationChecks } from './types';
+import type {
+  VerificationResult,
+  VerifyOptions,
+  SmtpStatus,
+  SmtpResult,
+  VerificationChecks,
+  CatchAllSignals,
+} from './types';
 import { isValidFormat, extractDomain, extractLocalPart, normalizeEmail } from './validators/format';
 import { checkDns } from './validators/dns';
-import { probeWithFallback } from './validators/smtp';
+import { probeWithTimingStats } from './validators/smtp';
 import { emailCache, dnsCache, emailCacheKey, domainCacheKey } from './cache';
 import { smtpThrottle } from './throttle';
 import { detectProvider } from './providers';
 import { isDisposableEmail } from './detectors/disposable';
 import { isRoleBasedEmail } from './detectors/role-based';
 import { isFreeEmail } from './detectors/free-provider';
+import {
+  analyzeCatchAll,
+  analyzeEmailPattern,
+  analyzeNameLikeness,
+  checkSPF,
+  checkDMARC,
+} from './analyzers/catchall';
 
 // Re-export types
-export type { VerificationResult, VerifyOptions, SmtpStatus, MailProvider, VerificationChecks } from './types';
+export type {
+  VerificationResult,
+  VerifyOptions,
+  SmtpStatus,
+  MailProvider,
+  VerificationChecks,
+  CatchAllSignals,
+} from './types';
 
 /**
  * Default options for email verification
@@ -37,9 +58,13 @@ const DEFAULT_OPTIONS: Required<VerifyOptions> = {
 const CONFIDENCE = {
   INVALID: 0,
   SMTP_UNKNOWN: 0.5,
-  CATCH_ALL: 0.6,
   VERIFIED: 0.95,
 };
+
+/**
+ * Number of probes to use for timing analysis
+ */
+const TIMING_PROBE_COUNT = 2;
 
 /**
  * Generates a "corrupted" test email for catch-all detection
@@ -79,13 +104,90 @@ function createDefaultChecks(): VerificationChecks {
 }
 
 /**
+ * Creates a default CatchAllSignals object
+ */
+function createDefaultSignals(): CatchAllSignals {
+  return {
+    patternMatch: 0,
+    patternName: null,
+    nameScore: 0,
+    timingScore: 0.5,
+    hasSPF: false,
+    hasDMARC: false,
+    mxCount: 0,
+  };
+}
+
+/**
+ * Analyzes timing difference between real and fake email probes
+ *
+ * @param realAvg - Average RCPT TO time for real email (ms)
+ * @param fakeAvg - Average RCPT TO time for fake email (ms)
+ * @returns Score (0.0 - 1.0) and analysis details
+ */
+function analyzeTimingDifference(
+  realAvg: number,
+  fakeAvg: number
+): { score: number; reason: string } {
+  if (realAvg === 0 || fakeAvg === 0) {
+    return { score: 0.5, reason: 'Insufficient timing data' };
+  }
+
+  const diffMs = fakeAvg - realAvg;
+  const diffPercent = diffMs / Math.max(realAvg, 1);
+
+  // If fake email took significantly longer, it's a positive signal
+  // (server might be doing more work to reject/accept a non-existent address)
+  if (diffPercent > 1.0) {
+    // Fake took more than 2x as long - very strong signal
+    return {
+      score: 0.9,
+      reason: `Fake email response ${Math.round(diffPercent * 100)}% slower (strong positive signal)`,
+    };
+  }
+  if (diffPercent > 0.5) {
+    // Fake took 50-100% longer - good signal
+    return {
+      score: 0.8,
+      reason: `Fake email response ${Math.round(diffPercent * 100)}% slower (positive signal)`,
+    };
+  }
+  if (diffPercent > 0.2) {
+    // Fake took 20-50% longer - moderate signal
+    return {
+      score: 0.65,
+      reason: `Fake email response ${Math.round(diffPercent * 100)}% slower (moderate signal)`,
+    };
+  }
+  if (diffPercent > -0.2) {
+    // Similar timing - no signal
+    return {
+      score: 0.5,
+      reason: 'Similar response times for real and fake emails (no signal)',
+    };
+  }
+  if (diffPercent > -0.5) {
+    // Real took longer - slightly negative
+    return {
+      score: 0.4,
+      reason: `Real email response ${Math.round(-diffPercent * 100)}% slower (weak negative signal)`,
+    };
+  }
+  // Real took much longer - negative signal
+  return {
+    score: 0.3,
+    reason: `Real email response ${Math.round(-diffPercent * 100)}% slower (negative signal)`,
+  };
+}
+
+/**
  * Verifies a single email address
  *
  * Performs the following checks:
  * 1. Format validation (RFC 5322)
  * 2. DNS lookup (MX records, A record fallback)
  * 3. SMTP probe (RCPT TO verification)
- * 4. Catch-all detection (optional)
+ * 4. Catch-all detection with timing analysis
  * 5. Disposable email detection
  * 6. Role-based account detection
  * 7. Free email provider detection
@@ -120,6 +222,7 @@ export async function verifyEmail(
 
   // Initialize checks
   const checks = createDefaultChecks();
+  const confidenceReasons: string[] = [];
 
   // Run immediate detections (don't require network)
   checks.isDisposableEmail = isDisposableEmail(email);
@@ -130,6 +233,7 @@ export async function verifyEmail(
   checks.isValidSyntax = isValidFormat(email);
 
   if (!checks.isValidSyntax) {
+    confidenceReasons.push('Invalid email format');
     const result: VerificationResult = {
       email,
       valid: false,
@@ -142,6 +246,8 @@ export async function verifyEmail(
         smtpStatus: 'skipped',
         catchAll: null,
         provider: null,
+        catchAllSignals: null,
+        confidenceReasons,
       },
     };
     return result;
@@ -149,6 +255,7 @@ export async function verifyEmail(
 
   const domain = extractDomain(email);
   if (!domain) {
+    confidenceReasons.push('Could not extract domain');
     const result: VerificationResult = {
       email,
       valid: false,
@@ -161,6 +268,8 @@ export async function verifyEmail(
         smtpStatus: 'skipped',
         catchAll: null,
         provider: null,
+        catchAllSignals: null,
+        confidenceReasons,
       },
     };
     return result;
@@ -177,6 +286,7 @@ export async function verifyEmail(
 
   if (!dnsResult.hasValidDns) {
     checks.isUnknown = false; // We know it's invalid
+    confidenceReasons.push('No valid DNS records found');
     const result: VerificationResult = {
       email,
       valid: false,
@@ -189,6 +299,8 @@ export async function verifyEmail(
         smtpStatus: 'skipped',
         catchAll: null,
         provider: null,
+        catchAllSignals: null,
+        confidenceReasons,
       },
     };
 
@@ -203,6 +315,8 @@ export async function verifyEmail(
 
   // Step 3: SMTP check (if enabled)
   let smtpStatus: SmtpStatus = 'skipped';
+  let realSmtpResult: SmtpResult | null = null;
+  let realAvgRcptToTime = 0;
   const primaryMx = mxHosts[0];
 
   if (opts.smtpCheck && mxHosts.length > 0 && primaryMx) {
@@ -210,6 +324,7 @@ export async function verifyEmail(
     if (!smtpThrottle.canProceed(primaryMx)) {
       // In backoff, return unknown status
       checks.isUnknown = true;
+      confidenceReasons.push('SMTP throttled - in backoff period');
       const result: VerificationResult = {
         email,
         valid: true, // Assume valid but uncertain
@@ -222,6 +337,8 @@ export async function verifyEmail(
           smtpStatus: 'unknown',
           catchAll: null,
           provider,
+          catchAllSignals: null,
+          confidenceReasons,
         },
       };
       return result;
@@ -229,9 +346,11 @@ export async function verifyEmail(
 
     smtpThrottle.consume(primaryMx);
 
-    const smtpResult = await probeWithFallback(
+    // Use timing stats for better analysis
+    const realProbeStats = await probeWithTimingStats(
       mxHosts,
       email,
+      TIMING_PROBE_COUNT,
       {
         port: opts.smtpPort,
         timeout: opts.smtpTimeout,
@@ -239,7 +358,9 @@ export async function verifyEmail(
       }
     );
 
-    smtpStatus = smtpResult.status;
+    realSmtpResult = realProbeStats.result;
+    realAvgRcptToTime = realProbeStats.avgRcptToTime;
+    smtpStatus = realSmtpResult.status;
     checks.canConnectSmtp = smtpStatus !== 'unknown';
     checks.isDeliverable = smtpStatus === 'accepted';
 
@@ -254,6 +375,7 @@ export async function verifyEmail(
   // If SMTP rejected, email is invalid
   if (smtpStatus === 'rejected') {
     checks.isUnknown = false;
+    confidenceReasons.push('SMTP server rejected the recipient');
     const result: VerificationResult = {
       email,
       valid: false,
@@ -266,6 +388,8 @@ export async function verifyEmail(
         smtpStatus,
         catchAll: null,
         provider,
+        catchAllSignals: null,
+        confidenceReasons,
       },
     };
 
@@ -278,6 +402,7 @@ export async function verifyEmail(
   // If SMTP unknown, return uncertain result
   if (smtpStatus === 'unknown') {
     checks.isUnknown = true;
+    confidenceReasons.push('SMTP connection failed or timed out');
     const result: VerificationResult = {
       email,
       valid: true, // Could be valid
@@ -290,20 +415,27 @@ export async function verifyEmail(
         smtpStatus,
         catchAll: null,
         provider,
+        catchAllSignals: null,
+        confidenceReasons,
       },
     };
     return result;
   }
 
-  // Step 4: Catch-all detection (if enabled and SMTP accepted)
+  // Step 4: Catch-all detection with timing analysis
   let catchAll: boolean | null = null;
+  let fakeAvgRcptToTime = 0;
+  let catchAllSignals: CatchAllSignals = createDefaultSignals();
+  catchAllSignals.mxCount = mxHosts.length;
 
   if (opts.catchAllCheck && smtpStatus === 'accepted' && mxHosts.length > 0) {
     const testEmail = generateCatchAllTestEmail(email);
 
-    const catchAllResult = await probeWithFallback(
+    // Use timing stats for catch-all probe too
+    const fakeProbeStats = await probeWithTimingStats(
       mxHosts,
       testEmail,
+      TIMING_PROBE_COUNT,
       {
         port: opts.smtpPort,
         timeout: opts.smtpTimeout,
@@ -311,10 +443,45 @@ export async function verifyEmail(
       }
     );
 
+    fakeAvgRcptToTime = fakeProbeStats.avgRcptToTime;
+
     // If the fake email is also accepted, it's a catch-all
-    catchAll = catchAllResult.status === 'accepted';
+    catchAll = fakeProbeStats.result.status === 'accepted';
     checks.isCatchAllDomain = catchAll;
+
+    // Analyze timing difference
+    const timingAnalysis = analyzeTimingDifference(realAvgRcptToTime, fakeAvgRcptToTime);
+    catchAllSignals.timingScore = timingAnalysis.score;
+    confidenceReasons.push(timingAnalysis.reason);
+
+    // Store timing analysis details
+    if (realAvgRcptToTime > 0 && fakeAvgRcptToTime > 0) {
+      catchAllSignals.timingAnalysis = {
+        realAvgMs: Math.round(realAvgRcptToTime),
+        fakeAvgMs: Math.round(fakeAvgRcptToTime),
+        diffMs: Math.round(fakeAvgRcptToTime - realAvgRcptToTime),
+        diffPercent: Math.round(((fakeAvgRcptToTime - realAvgRcptToTime) / realAvgRcptToTime) * 100),
+        probeCount: TIMING_PROBE_COUNT,
+      };
+    }
   }
+
+  // Step 5: Advanced analysis - email pattern and domain maturity
+  const localPart = extractLocalPart(email);
+  const patternResult = analyzeEmailPattern(localPart || '');
+  const nameScore = analyzeNameLikeness(localPart || '');
+
+  catchAllSignals.patternMatch = patternResult.score;
+  catchAllSignals.patternName = patternResult.pattern;
+  catchAllSignals.nameScore = nameScore;
+
+  // Get domain security info in parallel
+  const [hasSPF, hasDMARC] = await Promise.all([
+    checkSPF(domain, opts.dnsTimeout),
+    checkDMARC(domain, opts.dnsTimeout),
+  ]);
+  catchAllSignals.hasSPF = hasSPF;
+  catchAllSignals.hasDMARC = hasDMARC;
 
   // Calculate final confidence
   let confidence: number;
@@ -323,25 +490,62 @@ export async function verifyEmail(
   if (smtpStatus === 'skipped') {
     // No SMTP check - format and DNS valid, moderate confidence
     confidence = 0.7;
-    checks.isUnknown = true; // Still somewhat unknown without SMTP
+    checks.isUnknown = true;
+    confidenceReasons.push('SMTP check skipped - limited verification');
   } else if (catchAll === true) {
-    // Catch-all detected - lower confidence
-    confidence = CONFIDENCE.CATCH_ALL;
-    checks.isUnknown = true; // Catch-all means we can't verify the specific mailbox
+    // Catch-all detected - use advanced analysis for confidence
+    const analysis = await analyzeCatchAll(
+      email,
+      domain,
+      true,
+      realSmtpResult!,
+      null,
+      mxHosts.length,
+      realAvgRcptToTime,
+      fakeAvgRcptToTime
+    );
+
+    // Combine analysis confidence with timing score
+    // Give timing more weight (40%) in catch-all scenarios
+    const baseConfidence = analysis.confidence;
+    const timingBonus = (catchAllSignals.timingScore - 0.5) * 0.2; // -0.1 to +0.1 adjustment
+    confidence = Math.min(Math.max(baseConfidence + timingBonus, 0), 0.85); // Cap at 85% for catch-all
+
+    confidenceReasons.push(...analysis.reasons);
+
+    // If catch-all analysis gives high confidence (>0.75), mark as less unknown
+    if (confidence >= 0.75) {
+      checks.isUnknown = false;
+    } else {
+      checks.isUnknown = true;
+    }
   } else {
     // SMTP accepted and not catch-all - high confidence
     confidence = CONFIDENCE.VERIFIED;
+    confidenceReasons.push('SMTP server accepted recipient');
+    confidenceReasons.push('Not a catch-all domain');
+  }
+
+  // Add pattern and name analysis reasons
+  if (patternResult.score > 0.7) {
+    confidenceReasons.push(`Email follows '${patternResult.pattern}' naming pattern`);
+  }
+  if (nameScore > 0.7) {
+    confidenceReasons.push('Local part appears to be a real name');
+  }
+  if (hasSPF && hasDMARC) {
+    confidenceReasons.push('Domain has proper email security (SPF + DMARC)');
   }
 
   // Determine if safe to send
+  // For catch-all domains, use the analyzed confidence threshold
   const isSafeToSend =
     checks.isValidSyntax &&
     checks.isValidDomain &&
     checks.isDeliverable &&
-    !checks.isCatchAllDomain &&
     !checks.isDisposableEmail &&
     !checks.isRoleBasedAccount &&
-    !checks.isUnknown;
+    (catchAll !== true || confidence >= 0.75); // Allow catch-all if high confidence
 
   const result: VerificationResult = {
     email,
@@ -355,6 +559,8 @@ export async function verifyEmail(
       smtpStatus,
       catchAll,
       provider,
+      catchAllSignals,
+      confidenceReasons,
     },
   };
 
@@ -372,6 +578,16 @@ export { detectProvider } from './providers';
 export { isDisposableEmail, isDisposableDomain } from './detectors/disposable';
 export { isRoleBasedEmail, isRoleBasedLocalPart } from './detectors/role-based';
 export { isFreeEmail, isFreeEmailDomain } from './detectors/free-provider';
+
+// Export analyzers for direct use
+export {
+  analyzeCatchAll,
+  analyzeEmailPattern,
+  analyzeNameLikeness,
+  checkSPF,
+  checkDMARC,
+} from './analyzers/catchall';
+export type { CatchAllAnalysis } from './analyzers/catchall';
 
 /**
  * Verifies multiple email addresses
@@ -426,4 +642,4 @@ export function clearThrottle(): void {
 // Export validators for direct use
 export { isValidFormat, extractDomain, extractLocalPart } from './validators/format';
 export { checkDns, getPrimaryMx } from './validators/dns';
-export { smtpProbe } from './validators/smtp';
+export { smtpProbe, probeWithFallback, probeWithTimingStats } from './validators/smtp';

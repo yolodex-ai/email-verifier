@@ -18,6 +18,46 @@ export interface MailProvider {
 }
 
 /**
+ * Signals used for catch-all analysis
+ */
+export interface CatchAllSignals {
+  /** Score for email pattern match (0.0 - 1.0) */
+  patternMatch: number;
+
+  /** Matched pattern name (e.g., 'first.last', 'firstlast') */
+  patternName: string | null;
+
+  /** Score for name-likeness (0.0 - 1.0) */
+  nameScore: number;
+
+  /** Score from response timing analysis (0.0 - 1.0) */
+  timingScore: number;
+
+  /** Whether domain has SPF record */
+  hasSPF: boolean;
+
+  /** Whether domain has DMARC record */
+  hasDMARC: boolean;
+
+  /** Number of MX records for the domain */
+  mxCount: number;
+
+  /** Timing analysis details */
+  timingAnalysis?: {
+    /** Average RCPT TO time for real email (ms) */
+    realAvgMs: number;
+    /** Average RCPT TO time for fake email (ms) */
+    fakeAvgMs: number;
+    /** Difference in ms (positive = fake is slower = good signal) */
+    diffMs: number;
+    /** Percentage difference */
+    diffPercent: number;
+    /** Number of probes used */
+    probeCount: number;
+  };
+}
+
+/**
  * Comprehensive verification checks
  */
 export interface VerificationChecks {
@@ -84,6 +124,12 @@ export interface VerificationResult {
 
     /** Information about the mail provider, null if unknown */
     provider: MailProvider | null;
+
+    /** Signals used for catch-all confidence analysis */
+    catchAllSignals: CatchAllSignals | null;
+
+    /** Reasons explaining the confidence score */
+    confidenceReasons: string[];
   };
 }
 
@@ -127,12 +173,34 @@ export interface DnsResult {
 }
 
 /**
+ * Detailed timing for each SMTP stage
+ */
+export interface SmtpTiming {
+  /** Time to establish TCP connection (ms) */
+  connect: number;
+  /** Time for banner response (ms) */
+  banner: number;
+  /** Time for EHLO/HELO response (ms) */
+  ehlo: number;
+  /** Time for MAIL FROM response (ms) */
+  mailFrom: number;
+  /** Time for RCPT TO response (ms) */
+  rcptTo: number;
+  /** Total time for entire probe (ms) */
+  total: number;
+}
+
+/**
  * Result of an SMTP probe
  */
 export interface SmtpResult {
   status: SmtpStatus;
   responseCode?: number;
   responseMessage?: string;
+  /** Time taken for the SMTP probe in milliseconds */
+  responseTime?: number;
+  /** Detailed timing for each stage */
+  timing?: SmtpTiming;
 }
 
 /**

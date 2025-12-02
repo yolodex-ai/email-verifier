@@ -136,7 +136,7 @@ ${colors.bold}EXAMPLES${colors.reset}
  * Prints version number
  */
 function printVersion(): void {
-  console.log('1.0.2');
+  console.log('1.2.0');
 }
 
 /**
@@ -186,6 +186,46 @@ function formatResult(result: VerificationResult): string {
     output += `    ${colors.blue}ℹ${colors.reset} Free Email Provider\n`;
   }
 
+  // Catch-all analysis signals (if available)
+  if (result.details.catchAllSignals && result.details.catchAll) {
+    const signals = result.details.catchAllSignals;
+    output += `\n  ${colors.bold}Catch-all Analysis:${colors.reset}\n`;
+
+    if (signals.patternName) {
+      const patternPercent = Math.round(signals.patternMatch * 100);
+      const patternColor = signals.patternMatch >= 0.7 ? colors.green : signals.patternMatch >= 0.5 ? colors.yellow : colors.red;
+      output += `    ${colors.dim}Email Pattern:${colors.reset} ${patternColor}${signals.patternName} (${patternPercent}%)${colors.reset}\n`;
+    }
+
+    const namePercent = Math.round(signals.nameScore * 100);
+    const nameColor = signals.nameScore >= 0.7 ? colors.green : signals.nameScore >= 0.5 ? colors.yellow : colors.red;
+    output += `    ${colors.dim}Name Score:${colors.reset} ${nameColor}${namePercent}%${colors.reset}\n`;
+
+    // Timing analysis
+    const timingPercent = Math.round(signals.timingScore * 100);
+    const timingColor = signals.timingScore >= 0.6 ? colors.green : signals.timingScore >= 0.4 ? colors.yellow : colors.red;
+    output += `    ${colors.dim}Timing Score:${colors.reset} ${timingColor}${timingPercent}%${colors.reset}`;
+
+    if (signals.timingAnalysis) {
+      const ta = signals.timingAnalysis;
+      const diffSign = ta.diffPercent >= 0 ? '+' : '';
+      output += ` ${colors.dim}(real: ${ta.realAvgMs}ms, fake: ${ta.fakeAvgMs}ms, ${diffSign}${ta.diffPercent}%)${colors.reset}`;
+    }
+    output += '\n';
+
+    output += `    ${colors.dim}SPF Record:${colors.reset} ${signals.hasSPF ? colors.green + 'Yes' : colors.yellow + 'No'}${colors.reset}\n`;
+    output += `    ${colors.dim}DMARC Record:${colors.reset} ${signals.hasDMARC ? colors.green + 'Yes' : colors.yellow + 'No'}${colors.reset}\n`;
+    output += `    ${colors.dim}MX Count:${colors.reset} ${signals.mxCount}\n`;
+  }
+
+  // Confidence reasons
+  if (result.details.confidenceReasons && result.details.confidenceReasons.length > 0) {
+    output += `\n  ${colors.bold}Confidence Reasons:${colors.reset}\n`;
+    for (const reason of result.details.confidenceReasons) {
+      output += `    ${colors.dim}•${colors.reset} ${reason}\n`;
+    }
+  }
+
   // Details
   output += `\n  ${colors.bold}Details:${colors.reset}\n`;
 
@@ -219,8 +259,8 @@ function formatResult(result: VerificationResult): string {
  */
 function formatTable(results: VerificationResult[]): string {
   const header = `
-${colors.bold}Email${' '.repeat(35)}Valid  Safe  Confidence  Deliverable  Catch-all  Disposable  Provider${colors.reset}
-${'─'.repeat(130)}`;
+${colors.bold}Email${' '.repeat(35)}Valid  Safe  Confidence  Deliverable  Catch-all  Provider${colors.reset}
+${'─'.repeat(120)}`;
 
   const rows = results.map((r) => {
     const email = r.email.padEnd(40).slice(0, 40);
@@ -229,10 +269,9 @@ ${'─'.repeat(130)}`;
     const confidence = `${Math.round(r.confidence * 100)}%`.padStart(3).padEnd(12);
     const deliverable = (r.checks.isDeliverable ? 'Yes' : 'No').padEnd(13);
     const catchAll = (r.checks.isCatchAllDomain ? 'Yes' : 'No').padEnd(11);
-    const disposable = (r.checks.isDisposableEmail ? 'Yes' : 'No').padEnd(12);
     const provider = (r.details.provider?.name || '-').slice(0, 20);
 
-    return `${email}${valid}${safe}${confidence}${deliverable}${catchAll}${disposable}${provider}`;
+    return `${email}${valid}${safe}${confidence}${deliverable}${catchAll}${provider}`;
   });
 
   return header + '\n' + rows.join('\n');
