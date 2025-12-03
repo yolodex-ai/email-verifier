@@ -23,7 +23,6 @@ import { isDisposableEmail } from './detectors/disposable';
 import { isRoleBasedEmail } from './detectors/role-based';
 import { isFreeEmail } from './detectors/free-provider';
 import {
-  analyzeCatchAll,
   analyzeEmailPattern,
   analyzeNameLikeness,
   checkSPF,
@@ -119,65 +118,119 @@ function createDefaultSignals(): CatchAllSignals {
 }
 
 /**
- * Analyzes timing difference between real and fake email probes
+ * Calculate Z-score for timing analysis
+ * 
+ * @param realAvg - Average RCPT TO time for real email (ms)
+ * @param fakeAvg - Average RCPT TO time for fake email (ms)
+ * @param fakeStdDev - Standard deviation of fake email times (estimated from single probe variance)
+ * @returns Z-score indicating statistical significance
+ */
+function calculateZScore(
+  realAvg: number,
+  fakeAvg: number,
+  fakeStdDev: number
+): number {
+  if (fakeStdDev === 0) {
+    // If no variance, use the difference itself as indicator
+    const diff = Math.abs(realAvg - fakeAvg);
+    if (diff > 100) return diff / 50; // Rough z-score estimate
+    return 0;
+  }
+  return Math.abs(realAvg - fakeAvg) / fakeStdDev;
+}
+
+/**
+ * Analyzes timing difference using Z-score
+ * Works for any mail provider - high Z-score = statistically significant difference
  *
  * @param realAvg - Average RCPT TO time for real email (ms)
  * @param fakeAvg - Average RCPT TO time for fake email (ms)
- * @returns Score (0.0 - 1.0) and analysis details
+ * @returns Analysis with Z-score and confidence boost
  */
 function analyzeTimingDifference(
   realAvg: number,
   fakeAvg: number
-): { score: number; reason: string } {
+): { zScore: number; confidence: number; reason: string } {
   if (realAvg === 0 || fakeAvg === 0) {
-    return { score: 0.5, reason: 'Insufficient timing data' };
+    return { zScore: 0, confidence: 0.5, reason: 'Insufficient timing data' };
   }
 
-  const diffMs = fakeAvg - realAvg;
-  const diffPercent = diffMs / Math.max(realAvg, 1);
-
-  // If fake email took significantly longer, it's a positive signal
-  // (server might be doing more work to reject/accept a non-existent address)
-  if (diffPercent > 1.0) {
-    // Fake took more than 2x as long - very strong signal
+  const diffMs = Math.abs(fakeAvg - realAvg);
+  const diffPercent = Math.round(((fakeAvg - realAvg) / realAvg) * 100);
+  
+  // Estimate standard deviation as 30% of the average (typical for network latency)
+  const estimatedStdDev = Math.max(fakeAvg * 0.3, 30);
+  const zScore = calculateZScore(realAvg, fakeAvg, estimatedStdDev);
+  
+  // Z-score interpretation:
+  // |z| > 5: Very strong signal
+  // |z| > 3: Strong signal  
+  // |z| > 2: Statistically significant
+  // |z| < 2: Not significant (within normal variance)
+  
+  if (zScore > 5) {
     return {
-      score: 0.9,
-      reason: `Fake email response ${Math.round(diffPercent * 100)}% slower (strong positive signal)`,
+      zScore,
+      confidence: 0.85,
+      reason: `Strong timing signal (z=${zScore.toFixed(1)}, ${diffPercent}% diff, ${diffMs}ms)`,
     };
   }
-  if (diffPercent > 0.5) {
-    // Fake took 50-100% longer - good signal
+  if (zScore > 3) {
     return {
-      score: 0.8,
-      reason: `Fake email response ${Math.round(diffPercent * 100)}% slower (positive signal)`,
+      zScore,
+      confidence: 0.75,
+      reason: `Good timing signal (z=${zScore.toFixed(1)}, ${diffPercent}% diff, ${diffMs}ms)`,
     };
   }
-  if (diffPercent > 0.2) {
-    // Fake took 20-50% longer - moderate signal
+  if (zScore > 2) {
     return {
-      score: 0.65,
-      reason: `Fake email response ${Math.round(diffPercent * 100)}% slower (moderate signal)`,
+      zScore,
+      confidence: 0.65,
+      reason: `Moderate timing signal (z=${zScore.toFixed(1)}, ${diffPercent}% diff)`,
     };
   }
-  if (diffPercent > -0.2) {
-    // Similar timing - no signal
-    return {
-      score: 0.5,
-      reason: 'Similar response times for real and fake emails (no signal)',
-    };
-  }
-  if (diffPercent > -0.5) {
-    // Real took longer - slightly negative
-    return {
-      score: 0.4,
-      reason: `Real email response ${Math.round(-diffPercent * 100)}% slower (weak negative signal)`,
-    };
-  }
-  // Real took much longer - negative signal
+  
+  // No significant signal
   return {
-    score: 0.3,
-    reason: `Real email response ${Math.round(-diffPercent * 100)}% slower (negative signal)`,
+    zScore,
+    confidence: 0.5,
+    reason: `No timing signal (z=${zScore.toFixed(1)}, within normal variance)`,
   };
+}
+
+/**
+ * Apply pattern penalty for suspicious email formats
+ * 
+ * Only REDUCES confidence - good patterns are expected and don't boost score
+ * 
+ * @param patternScore - Score from pattern analysis (0-1)
+ * @param nameScore - Score from name likeness analysis (0-1)
+ * @returns Penalty to apply (0 or negative)
+ */
+function getPatternPenalty(patternScore: number, nameScore: number): { penalty: number; reason: string | null } {
+  // Good patterns (first.last, first_last) - no penalty, this is expected
+  if (patternScore >= 0.7) {
+    return { penalty: 0, reason: null };
+  }
+  
+  // Moderate patterns (single name, flast) - small penalty if name doesn't look real
+  if (patternScore >= 0.5) {
+    if (nameScore >= 0.7) {
+      return { penalty: 0, reason: null };
+    }
+    return { penalty: -0.05, reason: 'Uncommon email pattern' };
+  }
+  
+  // Poor patterns (contains numbers, unknown) - significant penalty
+  if (patternScore >= 0.3) {
+    if (nameScore >= 0.7) {
+      return { penalty: -0.1, reason: 'Unusual email format' };
+    }
+    return { penalty: -0.15, reason: 'Suspicious email pattern' };
+  }
+  
+  // Very poor pattern (random chars, test-like) - heavy penalty
+  return { penalty: -0.25, reason: 'Does not follow standard email naming conventions' };
 }
 
 /**
@@ -449,9 +502,10 @@ export async function verifyEmail(
     catchAll = fakeProbeStats.result.status === 'accepted';
     checks.isCatchAllDomain = catchAll;
 
-    // Analyze timing difference
+    // Analyze timing difference using Z-score
     const timingAnalysis = analyzeTimingDifference(realAvgRcptToTime, fakeAvgRcptToTime);
-    catchAllSignals.timingScore = timingAnalysis.score;
+    catchAllSignals.timingScore = timingAnalysis.confidence;
+    catchAllSignals.zScore = timingAnalysis.zScore;
     confidenceReasons.push(timingAnalysis.reason);
 
     // Store timing analysis details
@@ -493,32 +547,39 @@ export async function verifyEmail(
     checks.isUnknown = true;
     confidenceReasons.push('SMTP check skipped - limited verification');
   } else if (catchAll === true) {
-    // Catch-all detected - use advanced analysis for confidence
-    const analysis = await analyzeCatchAll(
-      email,
-      domain,
-      true,
-      realSmtpResult!,
-      null,
-      mxHosts.length,
-      realAvgRcptToTime,
-      fakeAvgRcptToTime
-    );
-
-    // Combine analysis confidence with timing score
-    // Give timing more weight (40%) in catch-all scenarios
-    const baseConfidence = analysis.confidence;
-    const timingBonus = (catchAllSignals.timingScore - 0.5) * 0.2; // -0.1 to +0.1 adjustment
-    confidence = Math.min(Math.max(baseConfidence + timingBonus, 0), 0.85); // Cap at 85% for catch-all
-
-    confidenceReasons.push(...analysis.reasons);
-
-    // If catch-all analysis gives high confidence (>0.75), mark as less unknown
-    if (confidence >= 0.75) {
+    // Catch-all detected - use simple Z-score based approach
+    // This works for any mail provider - high Z-score = statistically significant timing difference
+    
+    const zScore = catchAllSignals.zScore ?? 0;
+    
+    // Start with Z-score based confidence
+    if (zScore > 5) {
+      confidence = 0.85;  // Very strong signal
       checks.isUnknown = false;
+    } else if (zScore > 3) {
+      confidence = 0.75;  // Strong signal
+      checks.isUnknown = false;
+    } else if (zScore > 2) {
+      confidence = 0.65;  // Moderate signal
+      checks.isUnknown = true;
     } else {
+      confidence = 0.50;  // No signal - truly unknown
       checks.isUnknown = true;
     }
+    
+    // Apply pattern penalty (ONLY reduces, never increases)
+    const patternPenalty = getPatternPenalty(patternResult.score, nameScore);
+    if (patternPenalty.penalty < 0) {
+      confidence += patternPenalty.penalty;
+      if (patternPenalty.reason) {
+        confidenceReasons.push(patternPenalty.reason);
+      }
+    }
+    
+    // Ensure confidence stays in valid range
+    confidence = Math.max(0, Math.min(confidence, 0.85));
+    
+    confidenceReasons.push('Domain is catch-all (accepts any email address)');
   } else {
     // SMTP accepted and not catch-all - high confidence
     confidence = CONFIDENCE.VERIFIED;
@@ -526,26 +587,20 @@ export async function verifyEmail(
     confidenceReasons.push('Not a catch-all domain');
   }
 
-  // Add pattern and name analysis reasons
-  if (patternResult.score > 0.7) {
-    confidenceReasons.push(`Email follows '${patternResult.pattern}' naming pattern`);
-  }
-  if (nameScore > 0.7) {
-    confidenceReasons.push('Local part appears to be a real name');
-  }
+  // Add informational notes (don't affect scoring)
   if (hasSPF && hasDMARC) {
     confidenceReasons.push('Domain has proper email security (SPF + DMARC)');
   }
 
   // Determine if safe to send
-  // For catch-all domains, use the analyzed confidence threshold
+  // For catch-all domains, require strong timing signal (z > 2)
   const isSafeToSend =
     checks.isValidSyntax &&
     checks.isValidDomain &&
     checks.isDeliverable &&
     !checks.isDisposableEmail &&
     !checks.isRoleBasedAccount &&
-    (catchAll !== true || confidence >= 0.75); // Allow catch-all if high confidence
+    (catchAll !== true || (catchAllSignals.zScore ?? 0) > 2); // Only safe if catch-all has timing signal
 
   const result: VerificationResult = {
     email,

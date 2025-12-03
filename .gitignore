@@ -20,6 +20,17 @@ Thumbs.db
 # Local test files (may contain PII)
 test-emails.ts
 test-emails.js
+timing-analysis.ts
+timing-analysis.js
+timing-analysis-extended.ts
+timing-analysis-extended.js
+microsoft-deep-test.ts
+microsoft-deep-test.js
+microsoft-alt-methods.ts
+microsoft-alt-methods.js
+validation-test.ts
+validation-test.js
+pii-tests/
 
 # Logs
 *.log

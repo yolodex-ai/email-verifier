@@ -33,6 +33,9 @@ export interface CatchAllSignals {
   /** Score from response timing analysis (0.0 - 1.0) */
   timingScore: number;
 
+  /** Z-score for timing analysis (|z| > 2 = statistically significant) */
+  zScore?: number;
+
   /** Whether domain has SPF record */
   hasSPF: boolean;
 
